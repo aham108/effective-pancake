@@ -26,13 +26,22 @@
 
 'use strict';
 
-require('dotenv').config();
+try { require('dotenv').config(); } catch (_) { /* optional locally */ }
 
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const path = require('path');
 const { createClient } = require('@supabase/supabase-js');
+
+// Node has no built-in WebSocket. Newer supabase-js needs one for Realtime init
+// even if we only use REST. Without this, Railway crashes on createClient().
+let WebSocketImpl = null;
+try {
+  WebSocketImpl = require('ws');
+} catch (_) {
+  console.warn('[qs] optional package "ws" not installed — realtime disabled');
+}
 
 // ---------------------------------------------------------------------------
 // Config
@@ -127,9 +136,20 @@ CREATE TABLE IF NOT EXISTS contact_messages (
 // ---------------------------------------------------------------------------
 let supabase = null;
 if (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY) {
-  supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
-    auth: { autoRefreshToken: false, persistSession: false },
-  });
+  try {
+    const clientOpts = {
+      auth: { autoRefreshToken: false, persistSession: false },
+    };
+    // Provide WebSocket so @supabase/realtime-js does not throw in Node
+    if (WebSocketImpl) {
+      clientOpts.realtime = { transport: WebSocketImpl };
+    }
+    supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, clientOpts);
+    console.log('[qs] Supabase client created');
+  } catch (err) {
+    console.error('[qs] Supabase client failed:', err && err.message ? err.message : err);
+    supabase = null;
+  }
 } else {
   console.warn(
     '[qs] SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY missing — API will return errors until set.'
